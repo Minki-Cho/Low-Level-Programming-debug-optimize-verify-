@@ -1,0 +1,118 @@
+name: CMake_Windows
+
+on: 
+  push:        
+  pull_request:
+    branches:
+    - main
+
+jobs:
+  build-windows:
+    # The CMake configure and build commands are platform agnostic and should work equally
+    # well on Windows or Mac.  You can convert this to a matrix build if you need
+    # cross-platform coverage.
+    # See: https://docs.github.com/en/actions/configuring-and-managing-workflows/configuring-a-workflow#configuring-a-build-matrix
+    runs-on: windows-latest
+    
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[skip windows]')"
+
+    timeout-minutes: 5
+
+    steps:
+      # Add MS Build  
+    - name: Add msbuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      # with:
+        # vs-version: '[16.4]'
+    
+      # Checkout the repository
+    - uses: actions/checkout@v4.1.4
+
+    - name: Remove Debug Logs
+      shell: bash
+      run: |
+        find . -type f \( -name "*.csv" -o -name "*.log" -o -name "*.txt" \) -not -name "CMakeLists.txt" -exec rm {} \;
+        
+    - name: Create Build Environment
+      # Equivalent of mkdir 
+      run: cmake -E make_directory build
+
+    - name: Configure CMake
+      # Use a bash shell so we can use the same syntax for environment variable
+      # access regardless of the host operating system
+      # Run CMAKE to generate make file
+      run: cmake -G "Visual Studio 17 2022" -A x64 -S . -B build
+
+    - name: Build
+      run: cmake --build build --config Debug
+
+    # - name: CTest
+    #   shell: powershell
+    #   run: |
+    #     cd build\src\Test\Debug
+    #     ctest -C Debug -VV --timeout 100
+
+    - name: Test 0
+      shell: pwsh
+      run: .\build\src\ProjectScenarios\Debug\ProjectScenarios.exe 0
+
+    - name: Test 1
+      shell: pwsh
+      run: |
+        try {
+          Get-ChildItem -Recurse -Include *.csv,*.log,*.txt | Where-Object { $_.Name -ne "CMakeLists.txt" } | Remove-Item -Force
+          .\build\src\ProjectScenarios\Debug\ProjectScenarios.exe 1
+          ls
+          if (Test-Path ".\DebugLog.csv") {
+            Write-Host "Found .\DebugLog.csv"
+            if ((Get-Item .\DebugLog.csv).length -eq 0) {
+              Write-Host "./DebugLog.csv is empty" -ForegroundColor Red
+              Exit 1
+            }
+            else {
+              Write-Host "Get-Content -Path ./DebugLog.csv"
+              Get-Content -Path .\DebugLog.csv
+            }
+          } elseif (Test-Path "./build/src/ProjectScenarios/Debug/DebugLog.csv") {
+            Write-Host "Found DebugLog.csv"
+            if ((Get-Item .\build/src/ProjectScenarios/Debug/DebugLog.csv).length -eq 0) {
+              Write-Host "./build/src/ProjectScenarios/Debug/DebugLog.csv is empty" -ForegroundColor Red
+              Exit 1
+            }
+            else {
+              Write-Host "Get-Content -Path ./build/src/ProjectScenarios/Debug/DebugLog.csv"
+              Get-Content -Path .\build/src/ProjectScenarios/Debug/DebugLog.csv
+            }
+          } else {
+            # Search for CSV and LOG files recursively
+            $files = Get-ChildItem -Recurse -Include *.csv,*.log,*.txt | Where-Object { $_.Name -ne "CMakeLists.txt" } | Select-Object -ExpandProperty FullName
+            
+            # Check if any files were found
+            if ($files.Count -eq 0) {
+              Write-Host "Error: Did not find DebugLog.csv! Found No files found that contain 'leak' or 'Leak'"
+              exit 1
+            }
+            
+            $count = 0
+            
+            # Loop through the files and print each one
+            foreach ($file in $files) {
+              if (Select-String -Path $file -Pattern "[Ll]eak") {
+                Write-Host "Found file: $file"
+                Get-Content $file
+                $count++
+              }
+            }
+            
+            # Check if count is 0 and print an error if it is
+            if ($count -eq 0) {
+              Write-Host "Error: Did not find DebugLog.csv! Found No files found that contain 'leak' or 'Leak'"
+              exit 1
+            }
+          }
+        } catch [System.SystemException] {
+            Write-Host $_ -ForegroundColor Red
+            Write-Host "$($_.InvocationInfo.Statement) $($_.InvocationInfo.PositionMessage)" -ForegroundColor Red
+            Write-Host $_.Exception -ForegroundColor Red
+            Write-Host $_.Exception.StackTrace -ForegroundColor Red
+        }
